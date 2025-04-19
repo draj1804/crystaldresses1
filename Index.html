@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <title>Sheets Dashboard</title>
+  <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.11.5/css/dataTables.bootstrap5.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+   <button class="sidebar-toggle" id="sidebarToggle">
+    <i class="fas fa-bars"></i>
+  </button>
+  
+  <div id="loading-spinner">
+    <div class="spinner-border text-primary" role="status">
+      <span class="visually-hidden">Loading...</span>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <h4 class="text-white">Crystal Dresses</h4>
+      </div>
+      
+      <div class="user-info" id="user-info">
+        Loading user information...
+      </div>
+      
+      <div class="nav-menu" id="nav-menu">
+  <!-- Dashboard Link -->
+  <div class="dropdown mb-4">
+    <a class="dropdown-item nav-link d-block text-center py-3" 
+       href="#" 
+       data-sheet="Dashboard"
+       style="background: var(--primary-color); color: white; border-radius: 8px;">
+      <i class="fas fa-tachometer-alt me-2"></i>Dashboard
+    </a>
+  </div>
+  
+  <!-- Other Menu Items -->
+  <div class="dropdown mb-2">
+    <button class="dropdown-toggle" type="button" data-bs-toggle="dropdown">
+      Payments
+    </button>
+    <ul class="dropdown-menu">
+      <li><a class="dropdown-item nav-link" href="#" data-sheet="Payments - Data">Payments - Data</a></li>
+      <li><a class="dropdown-item nav-link" href="#" data-sheet="Payments - Summary">Payments - Summary</a></li>
+    </ul>
+  </div>
+</div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="dashboard-content">
+      <h2 id="section-title" class="mb-4">Loading...</h2>
+      
+      <div id="content-area">
+        <div class="filter-section">
+          <h5>Filters</h5>
+          <div id="filters-container" class="row">
+            <!-- Filters will be loaded here dynamically -->
+          </div>
+          <div class="mt-2">
+            <button class="btn btn-primary" onclick="applyFilters()">Apply Filters</button>
+            <button class="btn btn-outline-secondary" onclick="clearFilters()">Clear Filters</button>
+          </div>
+        </div>
+
+        <div id="reports-container" style="display: none;">
+          <div class="report-container">
+            <iframe 
+              id="embedded-report" 
+              frameborder="0" 
+              style="border: 0; width: 100%; height: 600px;"
+              allowfullscreen
+              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+    >         </iframe>
+            </div>
+  <div id="report-auth-notice" class="alert alert-info mt-3" style="display: none;">
+    <i class="fas fa-info-circle me-2"></i>
+    If the report doesn't load, try <a href="#" onclick="openReportInNewTab()">opening it in a new tab</a> first to authenticate.
+  </div>
+</div>
+        
+        <div class="table-responsive">
+          <table id="data-table" class="table table-striped table-bordered" style="width:100%">
+            <!-- Table content will be loaded here dynamically -->
+          </table>
+        </div>
+      </div>
+      
+      <div id="access-denied-container"></div>
+      
+      <!-- Charts Container -->
+      <div id="charts-container" style="display: none;">
+        <div class="row mb-4">
+          <div class="col-12">
+            <div class="kpi-container" id="kpi-container"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-12">
+            <div id="statusChart" class="chart-container" style="height: 400px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdn.datatables.net/1.11.5/js/dataTables.bootstrap5.min.js"></script>
+
+  <script>
+    let currentUser = null;
+    let userRights = [];
+    let authorizedSheets = [];
+    let currentSheet = '';
+    let currentFilters = {};
+    let dataTable;
+    const PAGE_SIZE = 10000;
+    let currentCharts = [];
+  $(document).ready(function() {
+  // Initialize Google Charts
+  google.charts.load('current', {'packages':['corechart']});
+  
+  // Initialize app
+  checkAccess();
+  
+  // Setup sidebar with error handling
+  try {
+    setupSidebar();
+  } catch (e) {
+    console.error('Sidebar initialization failed:', e);
+  }
+  
+  // Debugging
+  google.charts.setOnLoadCallback(function() {
+    console.log("Google Charts fully loaded");
+  });
+});
+    function showLoading() {
+      document.getElementById('loading-spinner').style.display = 'block';
+    }
+    
+    function hideLoading() {
+      document.getElementById('loading-spinner').style.display = 'none';
+    }
+    
+    function showAccessDenied(message) {
+      document.getElementById('access-denied-container').innerHTML = `
+        <div class="access-denied">
+          <h3>Access Denied</h3>
+          <p>${message}</p>
+        </div>
+      `;
+      document.getElementById('content-area').style.display = 'none';
+      document.getElementById('charts-container').style.display = 'none';
+      hideLoading();
+      if (message.includes('sign in')) {
+    document.getElementById('report-auth-notice').style.display = 'block';
+  }
+    }
+    function openReportInNewTab() {
+  if (currentReport) {
+    google.script.run.withSuccessHandler(report => {
+      if (report) {
+        window.open(report.embedUrl, '_blank');
+      }
+    }).getReportEmbed(currentReport);
+  }
+  return false;
+}
+    function showContentArea() {
+      document.getElementById('access-denied-container').innerHTML = '';
+      document.getElementById('content-area').style.display = 'block';
+    }
+
+    function checkAccess() {
+      showLoading();
+      google.script.run.withSuccessHandler(response => {
+        if (response.error) {
+          showAccessDenied(response.error);
+          return;
+        }
+        
+        currentUser = response.email;
+        userRights = response.rights;
+        authorizedSheets = response.sheets;
+        
+        document.getElementById('user-info').innerHTML = `
+          Logged in as: <strong>${currentUser}</strong><br>
+          Access rights: <strong>${userRights.join(', ')}</strong>
+        `;
+        
+        buildNavigation();
+        
+        if (authorizedSheets.length > 0) {
+          loadSheet(authorizedSheets[0], 1);
+        } else {
+          showAccessDenied("No sheets available for your access level");
+        }
+        
+      }).withFailureHandler(error => {
+        showAccessDenied(error.message);
+      }).getAuthorizedSheets();
+    }
+
+    function buildNavigation() {
+      const navMenu = document.getElementById('nav-menu');
+      navMenu.innerHTML = '';
+      
+      // Add Dashboard link
+      navMenu.innerHTML += `
+        <div class="dropdown mb-4">
+          <a class="dropdown-item nav-link d-block text-center py-3" 
+             href="#" 
+             data-sheet="Dashboard"
+             style="background: var(--primary-color); color: white; border-radius: 8px;">
+            <i class="fas fa-tachometer-alt me-2"></i>Dashboard
+          </a>
+        </div>
+      `;
+      // In your buildNavigation() function
+navMenu.innerHTML += `
+    <div class="dropdown mb-4">
+      <a class="dropdown-item nav-link d-block text-center py-3" 
+         href="#" 
+         data-sheet="Dashboard"
+         style="background: var(--primary-color); color: white; border-radius: 8px;">
+        <i class="fas fa-tachometer-alt me-2"></i>Dashboard
+      </a>
+    </div>
+  `;
+  
+  // Add Delegation dropdown
+  navMenu.innerHTML += `
+    <div class="dropdown mb-2">
+      <button class="dropdown-toggle" type="button" data-bs-toggle="dropdown">
+        <i class="fas fa-users me-2"></i>Delegation
+      </button>
+      <ul class="dropdown-menu">
+        <li>
+          <a class="dropdown-item nav-link external-link" 
+             href="https://script.google.com/a/macros/crystaldresses.in/s/AKfycbwOfwWbLf7m-glTtluQqljsa2fqcD66IGe5IawqGaL4/dev" 
+             target="_blank" 
+             rel="noopener noreferrer">
+            <i class="fas fa-plus-circle me-2"></i>Add Delegation Task
+          </a>
+        </li>
+        <li>
+          <a class="dropdown-item nav-link" 
+             href="#" 
+             data-sheet="Delegation Task">
+            <i class="fas fa-list me-2"></i>List Delegation Tasks
+          </a>
+        </li>
+      </ul>
+    </div>
+  `;
+
+  navMenu.innerHTML += `
+    <div class="dropdown mb-2">
+      <button class="dropdown-toggle" type="button" data-bs-toggle="dropdown">
+        <i class="fas fa-chart-bar me-2"></i>Reports
+      </button>
+      <ul class="dropdown-menu">
+        <li><a class="dropdown-item nav-link" href="#" data-report="Sales Report">Sales Report</a></li>
+        <li><a class="dropdown-item nav-link" href="#" data-report="Marketing Performance">Marketing Performance</a></li>
+      </ul>
+    </div>
+  `;
+      
+      // Group sheets by category
+      const sheetGroups = {
+        'Payments': authorizedSheets.filter(s => s.includes('Payment') && s !== 'Dashboard'),
+        'Sales': authorizedSheets.filter(s => s.includes('Sales') && s !== 'Dashboard'),
+        'PC': authorizedSheets.filter(s => s.includes('PC') && s !== 'Dashboard')
+      };
+      
+      // Create dropdown for each group
+      Object.entries(sheetGroups).forEach(([groupName, sheets]) => {
+        if (sheets.length === 0) return;
+        
+        const dropdownHTML = `
+          <div class="dropdown mb-2">
+            <button class="dropdown-toggle" type="button" data-bs-toggle="dropdown">
+              ${groupName}
+            </button>
+            <ul class="dropdown-menu">
+              ${sheets.map(sheet => `
+                <li><a class="dropdown-item nav-link" href="#" data-sheet="${sheet}">${sheet}</a></li>
+              `).join('')}
+            </ul>
+          </div>
+        `;
+        navMenu.insertAdjacentHTML('beforeend', dropdownHTML);
+      });
+      
+      initializeDropdowns();
+    }
+
+    function initializeDropdowns() {
+  // Initialize Bootstrap dropdowns
+  const dropdownElements = document.querySelectorAll('.dropdown-toggle');
+  dropdownElements.forEach(el => {
+    new bootstrap.Dropdown(el);
+  });
+  
+  // Use event delegation for all navigation links
+  document.getElementById('nav-menu').addEventListener('click', function(e) {
+    const navLink = e.target.closest('.nav-link');
+    if (navLink) {
+      e.preventDefault();
+      const sheetName = navLink.getAttribute('data-sheet');
+      const reportName = navLink.getAttribute('data-report');
+      
+      if (sheetName) {
+        loadSheet(sheetName, 1);
+      } else if (reportName) {
+        loadReport(reportName);
+      }
+    }
+  });
+}
+    
+
+    function drawCharts(dashboardData) {
+      console.log("Drawing charts with data:", dashboardData);
+      
+      // Cleanup previous charts
+      if (window.chart) {
+        window.chart.clearChart();
+      }
+      
+      // Draw KPI cards
+      const kpiHtml = Object.entries(dashboardData.statusData).map(([status, value]) => `
+        <div class="kpi-card">
+          <div class="kpi-value">${value}</div>
+          <div class="kpi-label">${status}</div>
+        </div>
+      `).join('');
+
+      document.getElementById('kpi-container').innerHTML = kpiHtml;
+
+      // Load Google Charts
+      google.charts.load('current', {'packages':['corechart']});
+      
+      google.charts.setOnLoadCallback(function() {
+        try {
+          const data = new google.visualization.DataTable();
+          data.addColumn('string', 'Status');
+          data.addColumn('number', 'Count');
+          
+          dashboardData.chartData.forEach(row => {
+            data.addRow([row[0], row[1]]);
+          });
+
+          const options = {
+            title: 'Task Status Distribution',
+            pieHole: 0.4,
+            colors: ['#00b894', '#fdcb6e', '#d63031'],
+            chartArea: {
+              width: '90%', 
+              height: '80%',
+              left: "10%",
+              top: "10%"
+            },
+            legend: {
+              position: 'labeled',
+              alignment: 'center'
+            },
+            pieSliceText: 'value',
+            fontSize: 12
+          };
+
+          const chart = new google.visualization.PieChart(
+            document.getElementById('statusChart')
+          );
+          
+          window.chart = chart;
+          chart.draw(data, options);
+          
+          window.addEventListener('resize', function() {
+            chart.draw(data, options);
+          });
+          
+          console.log("Chart drawn successfully");
+        } catch (e) {
+          console.error("Error drawing chart:", e);
+        }
+      });
+    }
+
+    function loadDashboard() {
+  showLoading();
+  document.getElementById('section-title').textContent = 'Dashboard';
+  document.getElementById('filters-container').style.display = 'none';
+  document.getElementById('content-area').style.display = 'none';
+  document.getElementById('charts-container').style.display = 'block';
+  
+  google.script.run.withSuccessHandler(response => {
+    if (response.error) {
+      showAccessDenied(response.error);
+      return;
+    }
+    
+    drawCharts(response);
+    hideLoading();
+    
+  }).withFailureHandler(error => {
+    showAccessDenied(error.message);
+  }).getDashboardData();
+}
+
+      function setupSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const toggleBtn = document.getElementById('sidebarToggle');
+  
+  // Debugging check
+  if (!sidebar || !toggleBtn) {
+    console.error('Sidebar elements missing!');
+    console.log('Sidebar exists:', !!sidebar);
+    console.log('Toggle button exists:', !!toggleBtn);
+    return;
+  }
+
+  // Toggle sidebar visibility
+  function toggleSidebar() {
+    sidebar.classList.toggle('collapsed');
+    
+    // Add overlay click handler when sidebar opens
+    if (!sidebar.classList.contains('collapsed')) {
+      document.addEventListener('click', handleOutsideClick);
+    } else {
+      document.removeEventListener('click', handleOutsideClick);
+    }
+  }
+
+  // Handle clicks outside the sidebar
+  function handleOutsideClick(e) {
+    if (!sidebar.contains(e.target) && e.target !== toggleBtn) {
+      sidebar.classList.add('collapsed');
+      document.removeEventListener('click', handleOutsideClick);
+    }
+  }
+
+  // Initialize based on screen size
+  function handleResize() {
+    if (window.innerWidth > 992) {
+      sidebar.classList.remove('collapsed');
+      document.removeEventListener('click', handleOutsideClick);
+    }
+  }
+
+  // Set up event listeners
+  toggleBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    toggleSidebar();
+  });
+
+  window.addEventListener('resize', handleResize);
+  
+  // Initialize
+  handleResize();
+  
+  // Debugging
+  console.log('Sidebar initialized successfully');
+}
+       let currentFilterConfig = {};
+
+function loadSheet(sheetName, page) {
+  showLoading();
+  currentSheet = sheetName;
+  
+  // Update UI state
+  document.getElementById('section-title').textContent = sheetName;
+  document.getElementById('filters-container').style.display = 'flex';
+  document.getElementById('charts-container').style.display = 'none';
+  document.getElementById('content-area').style.display = 'block';
+
+  // Hide other containers
+  document.getElementById('reports-container').style.display = 'none';
+  document.getElementById('charts-container').style.display = 'none';
+  document.getElementById('content-area').style.display = 'block';
+  // Update active menu item
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.remove('active-submenu');
+    if (link.getAttribute('data-sheet') === sheetName) {
+      link.classList.add('active-submenu');
+    }
+  });
+  
+  // Special handling for Dashboard
+  if (sheetName === 'Dashboard') {
+    loadDashboard();
+    return;
+  }
+  
+  // First get filter configuration
+  google.script.run.withSuccessHandler(config => {
+    currentFilterConfig = config;
+    
+    // Then load the sheet data
+    google.script.run.withSuccessHandler(response => {
+      if (response.error) {
+        showAccessDenied(response.error);
+        return;
+      }
+      
+      displayData(response);
+      loadFilterOptions(response.headers);
+      hideLoading();
+      
+    }).getSheetData(sheetName, page, PAGE_SIZE);
+    
+  }).getFilterConfig(sheetName);
+}
+
+    function displayData(response) {
+      if (dataTable) {
+        dataTable.destroy();
+      }
+      
+      const table = $('#data-table');
+      table.empty();
+      
+      if (!response.data || response.headers.length === 0) {
+        table.html('<div class="alert alert-info">No data available</div>');
+        return;
+      }
+      
+      let html = '<thead><tr>';
+      response.headers.forEach(header => {
+        html += `<th>${header}</th>`;
+      });
+      html += '</tr></thead><tbody>';
+      
+      response.data.forEach(row => {
+        html += '<tr>';
+        row.forEach(cell => {
+          if (typeof cell === 'string' && cell.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            const date = new Date(cell);
+            html += `<td data-order="${date.getTime()}">${date.toLocaleDateString()}</td>`;
+          } else {
+            html += `<td>${cell !== null ? cell : ''}</td>`;
+          }
+        });
+        html += '</tr>';
+      });
+      
+      html += '</tbody>';
+      table.html(html);
+      
+      dataTable = table.DataTable({
+        responsive: true,
+        pageLength: 50,
+        lengthMenu: [10, 25, 50, 100],
+        dom: '<"top"lf>rt<"bottom"ip>',
+        initComplete: function() {
+          if (response.totalRows > 0) {
+            $('.dataTables_info').before(`
+              <div class="pagination-info">
+                Showing page ${response.page} of ${Math.ceil(response.totalRows / response.pageSize)}
+                (${response.totalRows} total records)
+              </div>
+            `);
+          }
+        }
+      });
+    }
+
+    function loadFilterOptions(headers) {
+  const container = document.getElementById('filters-container');
+  container.innerHTML = '';
+  
+  if (!currentFilterConfig) {
+    console.error('Filter configuration not loaded');
+    return;
+  }
+  
+  if (currentFilterConfig.filters === 'default') {
+    // Default behavior - create filters for all columns
+    headers.forEach((header, index) => {
+      createFilterControl(header, index);
+    });
+  } 
+  else if (Array.isArray(currentFilterConfig.filters)) {
+    // Custom filters for this sheet
+    currentFilterConfig.filters.forEach(filterName => {
+      const index = headers.indexOf(filterName);
+      if (index >= 0) {
+        createFilterControl(filterName, index, true);
+      } else {
+        console.warn(`Filter column '${filterName}' not found in sheet`);
+      }
+    });
+    
+    // Add special filter types
+    if (currentFilterConfig.dateRange) {
+      createDateRangeFilter();
+    }
+  }
+  
+  // Make sure filters container is visible
+  container.style.display = 'flex';
+}
+
+function createFilterControl(header, index, isCustom = false) {
+  const colDiv = document.createElement('div');
+  colDiv.className = 'col-md-3 mb-3';
+  
+  const label = document.createElement('label');
+  label.className = 'form-label mb-1';
+  label.textContent = header;
+  
+  const select = document.createElement('select');
+  select.className = 'form-select';
+  select.dataset.column = header;
+  
+  const defaultOption = document.createElement('option');
+  defaultOption.value = 'ALL';
+  defaultOption.textContent = 'All';
+  select.appendChild(defaultOption);
+  
+  // Check for special options
+  if (isCustom && currentFilterConfig.specialOptions?.[header]) {
+    currentFilterConfig.specialOptions[header].forEach(option => {
+      const optElement = document.createElement('option');
+      optElement.value = option;
+      optElement.textContent = option;
+      select.appendChild(optElement);
+    });
+  } else {
+    // Load dynamic options from sheet
+    google.script.run.withSuccessHandler(values => {
+      // Ensure values are unique and not empty
+      const uniqueValues = [...new Set(values.filter(v => v !== '' && v !== null))];
+      
+      uniqueValues.forEach(value => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      });
+    }).getColumnValues(currentSheet, index);
+  }
+  
+  colDiv.appendChild(label);
+  colDiv.appendChild(select);
+  document.getElementById('filters-container').appendChild(colDiv);
+}
+
+function createDateRangeFilter() {
+  const container = document.getElementById('filters-container');
+  
+  const rangeDiv = document.createElement('div');
+  rangeDiv.className = 'col-md-6 mb-3';
+  rangeDiv.innerHTML = `
+    <label class="form-label">Date Range</label>
+    <div class="input-group">
+      <input type="date" id="dateFrom" class="form-control" placeholder="From">
+      <span class="input-group-text">to</span>
+      <input type="date" id="dateTo" class="form-control" placeholder="To">
+    </div>
+  `;
+  
+  container.appendChild(rangeDiv);
+}
+
+function applyFilters() {
+  showLoading();
+  
+  const filters = {};
+  
+  // Handle regular select filters
+  document.querySelectorAll('#filters-container select').forEach(select => {
+    if (select.value && select.value !== 'ALL') {
+      filters[select.dataset.column] = select.value;
+    }
+  });
+  
+  // Handle date range if exists
+  if (currentFilterConfig.dateRange) {
+    const dateFrom = document.getElementById('dateFrom').value;
+    const dateTo = document.getElementById('dateTo').value;
+    
+    if (dateFrom) filters.dateFrom = dateFrom;
+    if (dateTo) filters.dateTo = dateTo;
+  }
+  
+  currentFilters = filters;
+  
+  google.script.run.withSuccessHandler(response => {
+    if (response.error) {
+      showAccessDenied(response.error);
+      return;
+    }
+    displayData(response);
+    hideLoading();
+  }).getFilteredData(currentSheet, filters, 1, PAGE_SIZE);
+}
+
+function getFilteredData(sheetName, filters, page = 1, pageSize = 500) {
+  try {
+    if (!validateSheetAccess(sheetName)) {
+      return { error: "Access denied to this sheet" };
+    }
+    
+    const allData = getSheetData(sheetName, 1, 10000);
+    if (allData.error) return allData;
+    
+    let filteredData = allData.data;
+    const headers = allData.headers;
+    
+    // Apply column filters
+    Object.entries(filters).forEach(([columnName, value]) => {
+      if (columnName === 'dateFrom' || columnName === 'dateTo') return;
+      
+      const colIndex = headers.indexOf(columnName);
+      if (colIndex >= 0) {
+        filteredData = filteredData.filter(row => row[colIndex] == value);
+      }
+    });
+    
+    // Apply date range filter if exists
+    if (filters.dateFrom || filters.dateTo) {
+      const dateColIndex = headers.findIndex(h => 
+        h.toLowerCase().includes('date') || 
+        h.toLowerCase().includes('time')
+      );
+      
+      if (dateColIndex >= 0) {
+        const fromDate = filters.dateFrom ? new Date(filters.dateFrom) : null;
+        const toDate = filters.dateTo ? new Date(filters.dateTo) : null;
+        
+        filteredData = filteredData.filter(row => {
+          const cellDate = new Date(row[dateColIndex]);
+          if (isNaN(cellDate.getTime())) return true;
+          
+          if (fromDate && cellDate < fromDate) return false;
+          if (toDate && cellDate > toDate) return false;
+          return true;
+        });
+      }
+    }
+    
+    const startIdx = (page - 1) * pageSize;
+    const endIdx = startIdx + pageSize;
+    const paginatedData = filteredData.slice(startIdx, endIdx);
+    
+    return {
+      headers: headers,
+      data: paginatedData,
+      totalRows: filteredData.length,
+      page: page,
+      pageSize: pageSize
+    };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+
+   
+
+    function clearFilters() {
+      document.querySelectorAll('#filters-container select').forEach(select => {
+        select.value = 'ALL';
+      });
+      loadSheet(currentSheet, 1);
+    }
+
+    function setupSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const sidebarToggle = document.getElementById('sidebarToggle');
+  const dashboardContent = document.querySelector('.dashboard-content');
+  
+  // Initialize based on current state
+  const isMobile = window.innerWidth <= 992;
+  let sidebarOpen = !isMobile; // Desktop starts open, mobile starts closed
+  
+  function updateSidebarState() {
+    if (sidebarOpen) {
+      sidebar.classList.remove('collapsed');
+      if (isMobile) {
+        sidebarToggle.style.left = '260px';
+        dashboardContent.style.pointerEvents = 'none';
+      } else {
+        sidebarToggle.style.display = 'none';
+      }
+    } else {
+      sidebar.classList.add('collapsed');
+      sidebarToggle.style.left = '10px';
+      dashboardContent.style.pointerEvents = 'auto';
+    }
+  }
+  
+  // Initial setup
+  updateSidebarState();
+  
+  // Toggle click handler
+  sidebarToggle.addEventListener('click', function(e) {
+    e.stopPropagation();
+    sidebarOpen = !sidebarOpen;
+    updateSidebarState();
+  });
+  
+  // Close when clicking outside on mobile
+  document.addEventListener('click', function(e) {
+    if (isMobile && sidebarOpen && 
+        !sidebar.contains(e.target) && 
+        e.target !== sidebarToggle) {
+      sidebarOpen = false;
+      updateSidebarState();
+    }
+  });
+  
+  // Handle window resize
+  window.addEventListener('resize', function() {
+    const nowMobile = window.innerWidth <= 992;
+    if (nowMobile !== isMobile) {
+      isMobile = nowMobile;
+      if (isMobile) {
+        sidebarOpen = false; // Auto-close when switching to mobile
+      } else {
+        sidebarOpen = true; // Auto-open when switching to desktop
+      }
+      updateSidebarState();
+    }
+  });
+  
+  // Prevent wheel events from propagating when at scroll limits
+  sidebar.addEventListener('wheel', function(e) {
+    if (this.scrollTop === 0 && e.deltaY < 0) {
+      e.preventDefault();
+    } else if (this.scrollHeight === this.scrollTop + this.clientHeight && e.deltaY > 0) {
+      e.preventDefault();
+    }
+  });
+}
+
+    $(document).ready(function() {
+  // Load Google Charts first
+  google.charts.load('current', {'packages':['corechart']});
+  
+  // Then initialize the app
+  checkAccess();
+  setupSidebar();
+  
+  // Debugging
+  google.charts.setOnLoadCallback(function() {
+    console.log("Google Charts fully loaded");
+  });
+});
+
+
+let currentReport = null;
+
+function loadReport(reportName) {
+  showLoading();
+  
+  // Hide other containers
+  document.getElementById('content-area').style.display = 'none';
+  document.getElementById('charts-container').style.display = 'none';
+  document.getElementById('reports-container').style.display = 'block';
+  
+  // Get report embed details
+  google.script.run.withSuccessHandler(report => {
+    if (!report) {
+      showAccessDenied("Report not found");
+      return;
+    }
+    
+    document.getElementById('section-title').textContent = reportName;
+    const iframe = document.getElementById('embedded-report');
+    
+    // Construct the URL with parameters
+    const url = new URL(report.embedUrl);
+    if (report.params) {
+      Object.entries(report.params).forEach(([key, value]) => {
+        url.searchParams.set(key, value);
+      });
+    }
+    
+    iframe.src = url.toString();
+    iframe.style.height = report.height;
+    
+    // Add event listener for when report loads
+    iframe.onload = function() {
+      hideLoading();
+      // Handle potential authentication requirements
+      try {
+        if (this.contentWindow.document.body.innerText.includes('sign in')) {
+          showAccessDenied("Please sign in to Google to view this report");
+        }
+      } catch (e) {
+        console.log("Couldn't check iframe content due to CORS");
+      }
+    };
+    
+    currentReport = reportName;
+    
+  }).withFailureHandler(error => {
+    showAccessDenied(error.message);
+  }).getReportEmbed(reportName);
+}
+
+// Add this to your existing getFilterConfig function
+function getReportEmbed(reportName) {
+  const reports = {
+    'Sales Report': {
+      // Use the embed URL from Looker Studio's "Embed report" dialog
+      embedUrl: 'https://lookerstudio.google.com/embed/reporting/REPORT_ID/page/PAGE_ID',
+      width: '100%',
+      height: '600px',
+      // Add required parameters
+      params: {
+        'authuser': 0, // Try with 0 or the user index
+        'persistent_params': {}
+      }
+    }
+    // Add other reports
+  };
+  
+  return reports[reportName] || null;
+}
+
+
+
+  </script>
+</body>
+</html>
